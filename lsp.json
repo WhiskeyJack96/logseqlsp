@@ -1,3 +1,8 @@
-{"time":"2023-01-09T22:03:14.276831-08:00","level":"INFO","msg":"test","version":"0.0.1"}
-{"time":"2023-01-09T22:03:16.75452-08:00","level":"INFO","msg":"code action fired","uri":"2023_01_09.md","position":{"line":0,"character":5}}
-{"time":"2023-01-09T22:03:16.848737-08:00","level":"INFO","msg":"resp","resp":"null"}
+{"time":"2023-01-11T23:08:49.132781-08:00","level":"INFO","msg":"test","version":"0.0.1"}
+{"time":"2023-01-11T23:08:52.739273-08:00","level":"INFO","msg":"code action fired","uri":"2023_01_11.md","position":{"line":0,"character":11}}
+{"time":"2023-01-11T23:08:52.739544-08:00","level":"INFO","msg":"code action fired","pageName":"Jan 11th, 2023","position":{"line":0,"character":11}}
+{"time":"2023-01-11T23:08:52.821849-08:00","level":"INFO","msg":"request success"}
+{"time":"2023-01-11T23:08:52.821979-08:00","level":"INFO","msg":"resp success"}
+{"time":"2023-01-11T23:08:52.822282-08:00","level":"INFO","msg":"found match","ref":"officehour"}
+{"time":"2023-01-11T23:08:52.822455-08:00","level":"INFO","msg":"doc success"}
+{"time":"2023-01-11T23:08:52.822547-08:00","level":"INFO","msg":"indexes","start":0,"end":14,"i":11}
