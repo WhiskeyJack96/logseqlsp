@@ -234,7 +234,16 @@ func (gi *graphInfo) definition(context *glsp.Context, params *protocol.Definiti
 				gi.logger.Info("getpage", slog.Any("resp", respMap))
 				s := (&url.URL{Scheme: "file", Path: path.Join(gi.path, gi.pagesPath, respMap["name"].(string)+".md")}).String()
 
-				return &protocol.Location{URI: s}, nil
+				return &protocol.Location{
+					URI: s,
+					//TODO compute range when travelling to a definition that isnt a page
+					//Range: protocol.Range{
+					//	Start: protocol.Position{
+					//		Line:      3,
+					//		Character: 0,
+					//	},
+					//},
+				}, nil
 			}
 		}
 	}

@@ -29,7 +29,7 @@ var (
 )
 
 var wikiLinkRegex = regexp.MustCompile(`(?:{{embed )?\[*\[\[(.+?)]]`)
-var tagLinkRegex = regexp.MustCompile(`#([[:ascii:]]+?)[[:space:]]`)
+var tagLinkRegex = regexp.MustCompile(`#([[:graph:]]+)[[:space:]]?`)
 var propertyLinkRegex = regexp.MustCompile(`^[[:space:]]*-?[[:space:]]*(.*)::(.*)$`)
 var embedLinkRegex = regexp.MustCompile(`.*\(\(([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})\)\).*`)
 
@@ -42,7 +42,7 @@ func New(logger *slog.Logger, reader io.Reader) (Document, error) {
 
 	var links []Link
 	for line, content := range strings.Split(string(file), "\n") {
-		//logger.Info("parsing document", slog.String("content", content))
+		logger.Info("parsing document", slog.String("content", content))
 		//(0,1) start,end indexes of the regex match
 		//(2,3) start,end indexes of the first capture
 		for _, match := range wikiLinkRegex.FindAllStringSubmatchIndex(content, -1) {
