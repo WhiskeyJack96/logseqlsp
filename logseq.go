@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/WhiskeyJack96/logseqlsp/document"
+	"io"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -19,39 +22,129 @@ import (
 const lsName = "logSeq"
 
 var version string = "0.0.1"
-var handler protocol.Handler
-var logger *slog.Logger
-var lsClient *resty.Client
+
+type graphInfo struct {
+	name string
+	path string
+
+	pagesPath string
+
+	journalsPath   string
+	journalPattern string
+	journalRegex   *regexp.Regexp
+
+	client  *resty.Client
+	logger  *slog.Logger
+	handler protocol.Handler
+}
 
 func main() {
 	lf, err := os.Create("/Users/jacobmikesell/Workspace/logseqlsp/lsp.json")
 	if err != nil {
 		panic(err)
 	}
-	logger = slog.New(slog.NewJSONHandler(lf))
-	logger.Info("test", slog.String("version", version))
 
-	lsClient = resty.New().SetBaseURL("http://localhost:12315").SetAuthToken("test")
+	logger := slog.New(slog.NewJSONHandler(lf))
+	logger.Info("test", slog.String("version", version))
+	defer func() {
+		a := recover()
+		logger.Info("panic recovered", slog.Any("r", a))
+	}()
+
+	lsClient := resty.New().SetBaseURL("http://localhost:12315").SetAuthToken("test")
 	lsClient.HeaderAuthorizationKey = "Authorization"
 
-	handler = protocol.Handler{
-		Initialize:             initialize,
-		Initialized:            initialized,
-		Shutdown:               shutdown,
-		SetTrace:               setTrace,
-		TextDocumentDefinition: definition,
-		// TextDocumentCodeAction: codeAction,
+	response, err := lsClient.R().SetBody(map[string]any{
+		"method": "logseq.App.getCurrentGraph",
+		"args":   nil,
+	}).Post("/api")
+	respMap := make(map[string]string)
+	if err := json.Unmarshal(response.Body(), &respMap); err != nil {
+		logger.Error("failed to read response exiting", err)
+		return
+	}
+	info := graphInfo{
+		name:           respMap["name"],
+		path:           respMap["path"],
+		pagesPath:      "pages",
+		journalsPath:   "journals",
+		journalPattern: "2006_01_02.md",
+		journalRegex:   regexp.MustCompile(`\d{4}_\d{2}_\d{2}\.md`),
+		client:         lsClient,
+		logger:         logger,
 	}
 
-	server := server.NewServer(&handler, lsName, false)
+	info.handler = protocol.Handler{
+		Initialize:             info.initialize,
+		Initialized:            info.initialized,
+		Shutdown:               info.shutdown,
+		SetTrace:               info.setTrace,
+		TextDocumentDefinition: info.definition,
 
-	server.RunStdio()
+		TextDocumentHover: func(context *glsp.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
+			logger.Info("hover", slog.Any("params", params))
+			readCloser, err := uriToReader(info.logger, params.TextDocument.URI)
+			if err != nil {
+				return nil, err
+			}
+			defer readCloser.Close()
+			d, err := document.New(info.logger, readCloser)
+			if err != nil {
+				return nil, err
+			}
+			for _, l := range d.Links {
+				if positionInRange(d.Contents, l.Range, params.Position) {
+					switch l.Type {
+					case document.Wiki, document.Tag, document.Prop:
+						//handle journal link?? maybe call to api to determine if page exists+ is journal
+						readCloser, err := os.Open(path.Join(info.path, info.pagesPath, l.Target))
+						if err != nil {
+							return nil, err
+						}
+						defer readCloser.Close()
+						hoverDoc, err := document.New(logger, readCloser)
+						if err != nil {
+							return nil, err
+						}
+						readCloser.Close()
+						return &protocol.Hover{Contents: hoverDoc.Contents}, nil
+
+					case document.BlockEmbed:
+						response, err := info.client.R().SetBody(map[string]any{
+							"method": "logseq.App.getBlock",
+							"args":   []string{l.Target},
+						}).Post("/api")
+						if err != nil {
+							return nil, err
+						}
+						respMap := make(map[string]any)
+						if err := json.Unmarshal(response.Body(), &respMap); err != nil {
+							logger.Error("failed to read response exiting", err)
+							return nil, err
+						}
+						return &protocol.Hover{Contents: respMap["content"]}, nil
+					}
+					return nil, nil
+				}
+			}
+
+			return nil, nil
+		},
+		TextDocumentCodeAction: info.codeAction,
+	}
+	logger.Info("serving")
+
+	s := server.NewServer(&info.handler, lsName, false)
+
+	logger.Error("run error", s.RunStdio())
 }
 
-func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
-	capabilities := handler.CreateServerCapabilities()
-	// capabilities.CodeActionProvider = true
+func (gi *graphInfo) initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
+	capabilities := gi.handler.CreateServerCapabilities()
+	capabilities.CodeActionProvider = true
 	capabilities.DefinitionProvider = true
+	capabilities.HoverProvider = true
+	gi.logger.Info("initialize", slog.Any("caps", capabilities))
 
 	return protocol.InitializeResult{
 		Capabilities: capabilities,
@@ -62,96 +155,118 @@ func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, 
 	}, nil
 }
 
-func initialized(context *glsp.Context, params *protocol.InitializedParams) error {
+func (gi *graphInfo) initialized(context *glsp.Context, params *protocol.InitializedParams) error {
 	return nil
 }
 
-func shutdown(context *glsp.Context) error {
+func (gi *graphInfo) shutdown(context *glsp.Context) error {
 	protocol.SetTraceValue(protocol.TraceValueOff)
 	return nil
 }
 
-func setTrace(context *glsp.Context, params *protocol.SetTraceParams) error {
+func (gi *graphInfo) setTrace(context *glsp.Context, params *protocol.SetTraceParams) error {
 	protocol.SetTraceValue(params.Value)
 	return nil
 }
 
-func codeAction(context *glsp.Context, params *protocol.CodeActionParams) (interface{}, error) {
-	logger.Info("code action fired", params.Range)
-
+func (gi *graphInfo) codeAction(context *glsp.Context, params *protocol.CodeActionParams) (interface{}, error) {
+	gi.logger.Info("code action fired", params.Range)
 	return nil, nil
 }
-func definition(context *glsp.Context, params *protocol.DefinitionParams) (interface{}, error) {
+
+func (gi *graphInfo) definition(context *glsp.Context, params *protocol.DefinitionParams) (interface{}, error) {
 	fileName := path.Base(params.TextDocument.URI)
 	dir := path.Dir(params.TextDocument.URI)
-	logger.Info("code action fired", slog.String("uri", fileName), slog.Any("position", params.Position))
+	gi.logger.Info("definition", slog.String("uri", params.TextDocument.URI), slog.Any("position", params.Position))
 	t, err := time.Parse("2006_01_02", fileName[:10])
 	if err != nil {
-		logger.Info("failed to query ls api for file", err)
+		gi.logger.Info("failed to query ls api for file", err)
 	}
 	pageName := formatDate(t)
-	logger.Info("code action fired", slog.String("pageName", pageName), slog.Any("position", params.Position))
-
-	response, err := lsClient.R().SetBody(map[string]any{
-		"method": "logseq.Editor.getPageBlocksTree",
-		"args":   []string{pageName},
-	}).SetResult(GetPageBlockTree{}).Post("/api")
+	gi.logger.Info("code action fired", slog.String("pageName", pageName), slog.Any("position", params.Position))
+	readCloser, err := uriToReader(gi.logger, params.TextDocument.URI)
 	if err != nil {
-		logger.Info("failed to query ls api for file", err)
+		return nil, err
 	}
-	logger.Info("request success")
-
-	pageBlockTree, ok := response.Result().(*GetPageBlockTree)
-	if !ok {
-		logger.Info(fmt.Sprintf("%T", response.Result()), slog.Any("resp", response.Result()))
-		return nil, nil
+	defer readCloser.Close()
+	d, err := document.New(gi.logger, readCloser)
+	if err != nil {
+		return nil, err
 	}
-	logger.Info("resp success")
+	for _, l := range d.Links {
+		if positionInRange(d.Contents, l.Range, params.Position) {
+			switch l.Type {
+			case document.Wiki, document.Tag, document.Prop:
+				gi.logger.Info(path.Join(gi.path, gi.pagesPath, l.Target))
+				gi.logger.Info(path.Join(dir, l.Target))
+				s := (&url.URL{Scheme: "file", Path: path.Join(gi.path, gi.pagesPath, l.Target)}).String()
+				return &protocol.Location{URI: s}, nil
+			case document.BlockEmbed:
+				response, err := gi.client.R().SetBody(map[string]any{
+					"method": "logseq.App.getBlock",
+					"args":   []string{l.Target},
+				}).Post("/api")
+				if err != nil {
+					return nil, err
+				}
+				respMap := make(map[string]any)
+				if err := json.Unmarshal(response.Body(), &respMap); err != nil {
+					gi.logger.Error("failed to read response exiting", err)
+					return nil, err
+				}
+				gi.logger.Info("getblock", slog.Any("resp", respMap))
+				page, ok := respMap["page"].(map[string]any)
+				if !ok {
+					return nil, errors.New("type mismatch")
+				}
+				response, err = gi.client.R().SetBody(map[string]any{
+					"method": "logseq.App.getPage",
+					"args":   []any{page["id"]},
+				}).Post("/api")
+				if err != nil {
+					return nil, err
+				}
+				respMap = make(map[string]any)
+				if err := json.Unmarshal(response.Body(), &respMap); err != nil {
+					gi.logger.Error("failed to read response exiting", err)
+					return nil, err
+				}
+				gi.logger.Info("getpage", slog.Any("resp", respMap))
+				s := (&url.URL{Scheme: "file", Path: path.Join(gi.path, gi.pagesPath, respMap["name"].(string)+".md")}).String()
 
-	d := newDocument(*pageBlockTree, path.Join(dir, "."))
-	logger.Info("doc success")
-
-	for _, l := range d.links {
-		if positionInRange(d.contents, l.Range, params.Position) {
-			return &protocol.Location{URI: path.Join(l.dir, l.target+".md")}, nil
+				return &protocol.Location{URI: s}, nil
+			}
 		}
 	}
 	return nil, nil
+}
+
+func uriToReader(logger *slog.Logger, uri string) (io.ReadCloser, error) {
+	requestURI, err := url.ParseRequestURI(uri)
+	if err != nil {
+		return nil, err
+	}
+	if requestURI.Scheme != "file" {
+		return nil, fmt.Errorf("unsupported uri scheme: %s", requestURI.Scheme)
+	}
+	file, err := os.Open(requestURI.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logger.Info("could not find file", slog.String("uri", uri))
+			return nil, err
+		}
+		return nil, err
+	}
+	return file, nil
 }
 
 func positionInRange(content string, rng protocol.Range, pos protocol.Position) bool {
 	start, end := rng.IndexesIn(content)
 	i := pos.IndexIn(content)
-	logger.Info("indexes", slog.Int("start", start), slog.Int("end", end), slog.Int("i", i))
+	//logger.Info("indexes", slog.Int("start", start), slog.Int("end", end), slog.Int("i", i))
 	return i >= start && i <= end
 }
 
-type document struct {
-	contents string
-	links    []link
-}
-type link struct {
-	target string
-	dir    string
-	Range  protocol.Range
-}
-
-var wikiLinkRegex = regexp.MustCompile(`\[*\[\[(.+?)]]`)
-
-func newDocument(blockTree GetPageBlockTree, basedir string) document {
-	var links []link
-	var sb strings.Builder
-	for line, block := range blockTree {
-		for _, match := range wikiLinkRegex.FindAllStringSubmatchIndex(block.Content, -1) {
-			href := block.Content[match[2]:match[3]]
-			logger.Info("found match", slog.String("ref", href))
-
-			links = append(links, newLink(href, basedir, line, match[0], match[1]))
-		}
-		sb.WriteString(block.Content)
-	}
-	return document{contents: sb.String(), links: links}
-}
 func formatDate(t time.Time) string {
 	suffix := "th"
 	switch t.Day() {
@@ -163,80 +278,4 @@ func formatDate(t time.Time) string {
 		suffix = "rd"
 	}
 	return t.Format("Jan 2" + suffix + ", 2006")
-}
-func newLink(href string, baseDir string, line, start, end int) link {
-	if href == "" {
-		return link{}
-	}
-
-	//// Go regexes work with bytes, but the LSP client expects character indexes.
-	//start = strutil.ByteIndexToRuneIndex(line, start)
-	//end = strutil.ByteIndexToRuneIndex(line, end)
-
-	return link{
-		target: href,
-		dir:    path.Join(path.Dir(baseDir), "pages"),
-		Range: protocol.Range{
-			Start: protocol.Position{
-				Line:      protocol.UInteger(line),
-				Character: protocol.UInteger(start),
-			},
-			End: protocol.Position{
-				Line:      protocol.UInteger(line),
-				Character: protocol.UInteger(end),
-			},
-		},
-	}
-}
-
-type GetPageBlockTree []GetPageBlockTreeElement
-
-func UnmarshalGetPageBlockTree(data []byte) (GetPageBlockTree, error) {
-	var r GetPageBlockTree
-	err := json.Unmarshal(data, &r)
-	return r, err
-}
-
-type GetPageBlockTreeElement struct {
-	Properties           Properties  `json:"properties"`
-	Unordered            bool        `json:"unordered"`
-	JournalDay           *int64      `json:"journalDay,omitempty"`
-	Parent               Left        `json:"parent"`
-	Children             []Child     `json:"children"`
-	ID                   int64       `json:"id"`
-	PathRefs             []Left      `json:"pathRefs"`
-	Level                int64       `json:"level"`
-	UUID                 string      `json:"uuid"`
-	Content              string      `json:"content"`
-	Journal              bool        `json:"journal?"`
-	Page                 Left        `json:"page"`
-	Left                 Left        `json:"left"`
-	Format               string      `json:"format"`
-	Refs                 []Left      `json:"refs,omitempty"`
-	PropertiesTextValues *Properties `json:"propertiesTextValues,omitempty"`
-	PropertiesOrder      []string    `json:"propertiesOrder,omitempty"`
-}
-
-type Child struct {
-	Properties Properties    `json:"properties"`
-	Unordered  bool          `json:"unordered"`
-	Parent     Left          `json:"parent"`
-	Children   []interface{} `json:"children"`
-	ID         int64         `json:"id"`
-	PathRefs   []Left        `json:"pathRefs"`
-	Level      int64         `json:"level"`
-	UUID       string        `json:"uuid"`
-	Content    string        `json:"content"`
-	Journal    bool          `json:"journal?"`
-	Page       Left          `json:"page"`
-	Left       Left          `json:"left"`
-	Format     string        `json:"format"`
-}
-
-type Left struct {
-	ID int64 `json:"id"`
-}
-
-type Properties struct {
-	Test *string `json:"test,omitempty"`
 }

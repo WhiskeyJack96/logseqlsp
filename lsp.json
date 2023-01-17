@@ -1,8 +1,7 @@
-{"time":"2023-01-11T23:08:49.132781-08:00","level":"INFO","msg":"test","version":"0.0.1"}
-{"time":"2023-01-11T23:08:52.739273-08:00","level":"INFO","msg":"code action fired","uri":"2023_01_11.md","position":{"line":0,"character":11}}
-{"time":"2023-01-11T23:08:52.739544-08:00","level":"INFO","msg":"code action fired","pageName":"Jan 11th, 2023","position":{"line":0,"character":11}}
-{"time":"2023-01-11T23:08:52.821849-08:00","level":"INFO","msg":"request success"}
-{"time":"2023-01-11T23:08:52.821979-08:00","level":"INFO","msg":"resp success"}
-{"time":"2023-01-11T23:08:52.822282-08:00","level":"INFO","msg":"found match","ref":"officehour"}
-{"time":"2023-01-11T23:08:52.822455-08:00","level":"INFO","msg":"doc success"}
-{"time":"2023-01-11T23:08:52.822547-08:00","level":"INFO","msg":"indexes","start":0,"end":14,"i":11}
+{"time":"2023-01-16T17:36:59.593243-08:00","level":"INFO","msg":"test","version":"0.0.1"}
+{"time":"2023-01-16T17:36:59.667177-08:00","level":"INFO","msg":"serving"}
+{"time":"2023-01-16T17:36:59.668002-08:00","level":"INFO","msg":"initialize","caps":{"hoverProvider":true,"definitionProvider":true,"codeActionProvider":true}}
+{"time":"2023-01-16T17:37:00.516921-08:00","level":"INFO","msg":"definition","uri":"file:///Users/jacobmikesell/Documents/test/journals/2023_01_16.md","position":{"line":16,"character":26}}
+{"time":"2023-01-16T17:37:00.517073-08:00","level":"INFO","msg":"code action fired","pageName":"Jan 16th, 2023","position":{"line":16,"character":26}}
+{"time":"2023-01-16T17:37:00.531151-08:00","level":"INFO","msg":"getblock","resp":{"children":[],"content":"some test info\nid:: 63c5f669-c3d5-4200-ae6d-d16a76094e10","format":"markdown","id":90,"journal?":false,"left":{"id":32},"page":{"id":32},"parent":{"id":32},"pathRefs":[{"id":32}],"properties":{"id":"63c5f669-c3d5-4200-ae6d-d16a76094e10"},"propertiesOrder":["id"],"unordered":true,"uuid":"63c5f669-c3d5-4200-ae6d-d16a76094e10"}}
+{"time":"2023-01-16T17:37:00.538939-08:00","level":"INFO","msg":"getpage","resp":{"createdAt":1673916372363,"file":{"id":92},"format":"markdown","id":32,"journal?":false,"name":"prop-with-space","originalName":"prop-with-space","updatedAt":1673918060827,"uuid":"63c5f03a-fb13-4b65-8cf7-5a733b3b8edb"}}
