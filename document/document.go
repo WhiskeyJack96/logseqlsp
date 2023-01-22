@@ -25,13 +25,16 @@ var (
 	Wiki       linkType = "WIKI"
 	Tag        linkType = "TAG"
 	Prop       linkType = "PROP"
+	PropValue  linkType = "PROPVALUE"
 	BlockEmbed linkType = "EMBED"
+	Query      linkType = "QUERY"
 )
 
-var wikiLinkRegex = regexp.MustCompile(`(?:{{embed )?\[*\[\[(.+?)]]`)
+var wikiLinkRegex = regexp.MustCompile(`(?:{{embed )?(\[*\[\[(.+?)]])`)
+var queryLinkRegex = regexp.MustCompile(`{{query (.*)`)
 var tagLinkRegex = regexp.MustCompile(`#([[:graph:]]+)[[:space:]]?`)
-var propertyLinkRegex = regexp.MustCompile(`^[[:space:]]*-?[[:space:]]*(.*)::(.*)$`)
-var embedLinkRegex = regexp.MustCompile(`.*\(\(([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})\)\).*`)
+var propertyLinkRegex = regexp.MustCompile(`^[[:space:]]*-?[[:space:]]*((.*)::[[:space:]]*(.*))$`)
+var embedLinkRegex = regexp.MustCompile(`.*\(?\(?([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})\)?\)?.*`)
 
 func New(logger *slog.Logger, reader io.Reader) (Document, error) {
 	file, err := io.ReadAll(reader)
@@ -45,10 +48,16 @@ func New(logger *slog.Logger, reader io.Reader) (Document, error) {
 		logger.Info("parsing document", slog.String("content", content))
 		//(0,1) start,end indexes of the regex match
 		//(2,3) start,end indexes of the first capture
-		for _, match := range wikiLinkRegex.FindAllStringSubmatchIndex(content, -1) {
+		//TODO order matters we should make regexs diff
+		for _, match := range queryLinkRegex.FindAllStringSubmatchIndex(content, -1) {
 			href := content[match[2]:match[3]]
+			//logger.Info("found embed", slog.Any("match", match))
+			links = append(links, newLink(href, Query, line, match[2], match[3]))
+		}
+		for _, match := range wikiLinkRegex.FindAllStringSubmatchIndex(content, -1) {
+			href := content[match[4]:match[5]]
 			//logger.Info("found match", slog.Any("match", match))
-			links = append(links, newLink(href, Wiki, line, match[0], match[1]))
+			links = append(links, newLink(href, Wiki, line, match[2], match[3]))
 		}
 		for _, match := range tagLinkRegex.FindAllStringSubmatchIndex(content, -1) {
 			href := content[match[2]:match[3]]
@@ -56,15 +65,23 @@ func New(logger *slog.Logger, reader io.Reader) (Document, error) {
 			links = append(links, newLink(href, Tag, line, match[0], match[1]))
 		}
 		for _, match := range propertyLinkRegex.FindAllStringSubmatchIndex(content, -1) {
-			href := content[match[2]:match[3]]
+			href := content[match[4]:match[5]]
+
 			//logger.Info("found prop", slog.Any("match", match))
-			links = append(links, newLink(href, Prop, line, match[0], match[1]))
+			links = append(links, newLink(href, Prop, line, match[4], match[5]))
+
+			//Value for id is technically a block embed link so we want to classify it as such
+			if href != "id" {
+				links = append(links, newLink(content[match[6]:match[7]], PropValue, line, match[6], match[7]))
+			}
+
 		}
 		for _, match := range embedLinkRegex.FindAllStringSubmatchIndex(content, -1) {
 			href := content[match[2]:match[3]]
 			//logger.Info("found embed", slog.Any("match", match))
-			links = append(links, newLink(href, BlockEmbed, line, match[0], match[1]))
+			links = append(links, newLink(href, BlockEmbed, line, match[2], match[3]))
 		}
+
 	}
 	return Document{Contents: string(file), Links: links}, nil
 }
