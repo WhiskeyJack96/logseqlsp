@@ -19,7 +19,7 @@ import (
 const lsName = "logSeq"
 
 // TODO make logging a config
-var logging = true
+var logging = false
 
 var version = "0.0.1"
 
