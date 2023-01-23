@@ -1,7 +1,7 @@
 
 on:
   release:
-    types: [created]
+    types: [created, updated]
 
 jobs:
   releases-matrix:
