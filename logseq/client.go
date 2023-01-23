@@ -7,6 +7,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"path"
 	"strconv"
+	"strings"
 )
 
 const IDProperty = "id"
@@ -87,7 +88,7 @@ type Block struct {
 	PathRefs             []Left      `json:"pathRefs"`
 	UUID                 string      `json:"uuid"`
 	Content              string      `json:"content"`
-	Children             [][]*string `json:"children"`
+	Children             []Block     `json:"children"`
 	Page                 Page        `json:"page"`
 	Left                 Left        `json:"left"`
 	Format               string      `json:"format"`
@@ -136,7 +137,9 @@ func (r *Page) ToURI(base string, journalPath string, pagePath string) string {
 	if r == nil {
 		return ""
 	}
-	fileName := fmt.Sprintf("%s.md", r.Name)
+	sanitizedName := strings.Replace(r.Name, "/", "___", -1)
+
+	fileName := fmt.Sprintf("%s.md", sanitizedName)
 	subFolder := pagePath
 	if r.Journal {
 		dateString := strconv.FormatInt(r.JournalDay, 10)
@@ -148,10 +151,10 @@ func (r *Page) ToURI(base string, journalPath string, pagePath string) string {
 
 type Properties map[string]any
 
-func (c Client) GetBlock(id string) (Block, error) {
+func (c Client) GetBlock(id string, includeChildren bool) (Block, error) {
 	response, err := c.r.R().SetBody(map[string]any{
 		"method": "logseq.App.getBlock",
-		"args":   []string{id},
+		"args":   []any{id, map[string]bool{"includeChildren": includeChildren}},
 	}).Post("")
 	if err != nil {
 		return Block{}, err
@@ -165,7 +168,7 @@ func (c Client) GetBlock(id string) (Block, error) {
 func (c Client) GetPageById(id int64) (Page, error) {
 	response, err := c.r.R().SetBody(map[string]any{
 		"method": "logseq.App.getPage",
-		"args":   []string{strconv.FormatInt(id, 10)},
+		"args":   []int64{id},
 	}).Post("")
 	if err != nil {
 		return Page{}, err

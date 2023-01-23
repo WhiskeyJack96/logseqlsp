@@ -10,20 +10,25 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"github.com/tliron/glsp/server"
 	"golang.org/x/exp/slog"
+	"io"
 	"os"
+	"path"
 	"strings"
 )
 
 const lsName = "logSeq"
 
-var version string = "0.0.1"
+// TODO make logging a config
+var logging = true
 
+var version = "0.0.1"
+
+// TODO get pages/journals path from the logseq api or make them config values
 type graphInfo struct {
 	name string
 	path string
 
-	pagesPath string
-
+	pagesPath    string
 	journalsPath string
 
 	client  logseq.Client
@@ -32,11 +37,17 @@ type graphInfo struct {
 }
 
 func main() {
-	lf, err := os.Create("/Users/jacobmikesell/Workspace/logseqlsp/lsp.json")
-	if err != nil {
-		panic(err)
+	lf := io.Discard
+	if logging {
+		dir, err := os.UserHomeDir()
+		if err != nil {
+			panic(err)
+		}
+		lf, err = os.Create(path.Join(dir, ".config", "logseqlsp", "log.json"))
+		if err != nil {
+			panic(err)
+		}
 	}
-
 	logger := slog.New(slog.NewJSONHandler(lf))
 	logger.Info("test", slog.String("version", version))
 	defer func() {
@@ -63,63 +74,15 @@ func main() {
 	}
 
 	info.handler = protocol.Handler{
-		//CancelRequest:                      nil,
-		//Progress:                           nil,
-		Initialize:  info.initialize,
-		Initialized: info.initialized,
-		Shutdown:    info.shutdown,
-		//Exit:                               nil,
-		//LogTrace:                           nil,
-		SetTrace: info.setTrace,
-		//WindowWorkDoneProgressCancel:       nil,
-		//WorkspaceDidChangeWorkspaceFolders: nil,
-		//WorkspaceDidChangeConfiguration:    nil,
-		//WorkspaceDidChangeWatchedFiles:     nil,
-		//WorkspaceSymbol:                    nil,
-		//WorkspaceExecuteCommand:            nil,
-		//WorkspaceWillCreateFiles:           nil,
-		//WorkspaceDidCreateFiles:            nil,
-		//WorkspaceWillRenameFiles:           nil,
-		//WorkspaceDidRenameFiles:            nil,
-		//WorkspaceWillDeleteFiles:           nil,
-		//WorkspaceDidDeleteFiles:            nil,
-		TextDocumentDidOpen:           nil,
-		TextDocumentDidChange:         nil,
-		TextDocumentWillSave:          nil,
-		TextDocumentWillSaveWaitUntil: nil,
-		TextDocumentDidSave:           nil,
-		TextDocumentDidClose:          nil,
-		TextDocumentCompletion:        nil,
-		CompletionItemResolve:         nil,
+		Initialize:                    info.initialize,
+		Initialized:                   info.initialized,
+		Shutdown:                      info.shutdown,
+		SetTrace:                      info.setTrace,
 		TextDocumentHover:             info.hover,
-		TextDocumentSignatureHelp:     nil,
-		TextDocumentDeclaration:       nil,
 		TextDocumentDefinition:        info.definition,
-		TextDocumentTypeDefinition:    nil,
-		TextDocumentImplementation:    nil,
-		TextDocumentReferences:        nil,
 		TextDocumentDocumentHighlight: info.highlight,
-		TextDocumentDocumentSymbol:    nil,
 		TextDocumentCodeAction:        info.codeAction,
-		CodeActionResolve:             nil,
-		TextDocumentCodeLens:          nil,
-		CodeLensResolve:               nil,
 		TextDocumentDocumentLink:      info.links,
-		DocumentLinkResolve:           nil,
-		TextDocumentColor:             nil,
-		TextDocumentColorPresentation: nil,
-		TextDocumentFormatting:        nil,
-		TextDocumentRangeFormatting:   nil,
-		TextDocumentOnTypeFormatting:  nil,
-		TextDocumentRename:            nil,
-		TextDocumentPrepareRename:     nil,
-		TextDocumentFoldingRange:      nil,
-		TextDocumentSelectionRange:    nil,
-		//TextDocumentPrepareCallHierarchy:    nil,
-		//CallHierarchyIncomingCalls:          nil,
-		//CallHierarchyOutgoingCalls:          nil,
-		TextDocumentLinkedEditingRange: nil,
-		TextDocumentMoniker:            nil,
 	}
 	logger.Info("serving")
 
@@ -169,34 +132,40 @@ func (gi *graphInfo) codeAction(context *glsp.Context, params *protocol.CodeActi
 
 func (gi *graphInfo) definition(context *glsp.Context, params *protocol.DefinitionParams) (interface{}, error) {
 	gi.logger.Info("definition", slog.String("uri", params.TextDocument.URI), slog.Any("position", params.Position))
-	d, err := gi.readURI(params.TextDocument)
+	d, err := readDocumentIdentifier(params.TextDocument)
 	if err != nil {
 		return nil, err
 	}
-	for _, l := range d.Links {
-		if positionInRange(d.Contents, l.Range, params.Position) {
-			s, err := gi.linkToURI(l)
-			if err != nil {
-				return nil, err
-			}
-
-			return &protocol.Location{
-				URI: *s,
-				//TODO compute range when travelling to a definition that isnt a page
-				//Range: protocol.Range{
-				//	Start: protocol.Position{
-				//		Line:      3,
-				//		Character: 0,
-				//	},
-				//},
-			}, nil
+	l, err := d.FindLinkForPosition(params.Position)
+	if err != nil {
+		gi.logger.Error("find link", err)
+		if errors.Is(err, document.ErrLinkNotFound) {
+			return nil, nil
 		}
+		return nil, err
 	}
-	return nil, nil
+
+	s, err := gi.linkToURI(l)
+	if err != nil {
+		return nil, err
+	}
+	gi.logger.Info("found link uri", slog.Any("uri", s))
+
+	return &protocol.Location{
+		URI: *s,
+		//TODO compute range when travelling to a definition that isnt a page
+		//Range: protocol.Range{
+		//	Start: protocol.Position{
+		//		Line:      3,
+		//		Character: 0,
+		//	},
+		//},
+	}, nil
+
 }
 
 func (gi *graphInfo) links(ctx *glsp.Context, params *protocol.DocumentLinkParams) ([]protocol.DocumentLink, error) {
-	d, err := gi.readURI(params.TextDocument)
+	d, err := readDocumentIdentifier(params.TextDocument)
 	if err != nil {
 		return nil, err
 	}
@@ -217,65 +186,68 @@ func (gi *graphInfo) links(ctx *glsp.Context, params *protocol.DocumentLinkParam
 
 func (gi *graphInfo) hover(context *glsp.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
 	gi.logger.Info("hover", slog.Any("params", params))
-	d, err := gi.readURI(params.TextDocument)
+	d, err := readDocumentIdentifier(params.TextDocument)
 	if err != nil {
 		return nil, err
 	}
-	for _, l := range d.Links {
-		if positionInRange(d.Contents, l.Range, params.Position) {
-			switch l.Type {
-			case document.Wiki, document.Tag, document.Prop:
-				hoverDoc, err := gi.linkToDocument(l)
-				if err != nil {
-					gi.logger.Info("could not find file", slog.String("uri", params.TextDocument.URI))
-					if errors.Is(err, os.ErrNotExist) {
-						return nil, nil
-					}
-					return nil, err
-				}
-				return &protocol.Hover{Contents: hoverDoc.Contents, Range: &l.Range}, nil
-			case document.Query:
-				response, err := gi.client.Query(l.Target)
-				if err != nil {
-					return nil, err
-				}
-				return &protocol.Hover{Contents: gi.queryToMarkup(response), Range: &l.Range}, nil
-			case document.BlockEmbed:
-				response, err := gi.client.GetBlock(l.Target)
-				if err != nil {
-					return nil, err
-				}
-				return &protocol.Hover{Contents: response.Content, Range: &l.Range}, nil
-			}
+	l, err := d.FindLinkForPosition(params.Position)
+	if err != nil {
+		if errors.Is(err, document.ErrLinkNotFound) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	switch l.Type {
+	case document.Wiki, document.Tag, document.Prop:
+		hoverDoc, err := gi.linkToDocument(l)
+		if err != nil {
+			gi.logger.Error("could not find file", err, slog.Any("link", l))
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return &protocol.Hover{Contents: hoverDoc.Contents, Range: &l.Range}, nil
+	case document.Query:
+		response, err := gi.client.Query(l.Target)
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.Hover{Contents: gi.queryToMarkup(response), Range: &l.Range}, nil
+	case document.BlockEmbed:
+		response, err := gi.client.GetBlock(l.Target, true)
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.Hover{Contents: gi.blockToMarkup(response), Range: &l.Range}, nil
 	}
 	return nil, nil
 }
 
 func (gi *graphInfo) highlight(context *glsp.Context, params *protocol.DocumentHighlightParams) ([]protocol.DocumentHighlight, error) {
-	d, err := gi.readURI(params.TextDocument)
+	d, err := readDocumentIdentifier(params.TextDocument)
 	if err != nil {
 		return nil, err
 	}
 	var highlights []protocol.DocumentHighlight
 	var primaryLink string
-	for _, link := range d.Links {
-		if positionInRange(d.Contents, link.Range, params.Position) {
-			kindText := protocol.DocumentHighlightKindText
-			primaryLink = link.Target
-			highlights = append(highlights, protocol.DocumentHighlight{
-				Range: link.Range,
-				Kind:  &kindText,
-			})
+	link, err := d.FindLinkForPosition(params.Position)
+	if err != nil {
+		if errors.Is(err, document.ErrLinkNotFound) {
+			return nil, nil
 		}
+		return nil, err
 	}
-	for _, link := range d.Links {
-		if link.Target == primaryLink && !positionInRange(d.Contents, link.Range, params.Position) {
-			kindText := protocol.DocumentHighlightKindText
-			primaryLink = link.Target
+	kindText := protocol.DocumentHighlightKindText
+	primaryLink = link.Target
+	highlights = append(highlights, protocol.DocumentHighlight{
+		Range: link.Range,
+		Kind:  &kindText,
+	})
+	for _, l := range d.Links {
+		if l.Target == primaryLink && !positionInRange(d.Contents, l.Range, params.Position) {
 			highlights = append(highlights, protocol.DocumentHighlight{
-				Range: link.Range,
+				Range: l.Range,
 				Kind:  &kindText,
 			})
 		}
@@ -283,13 +255,13 @@ func (gi *graphInfo) highlight(context *glsp.Context, params *protocol.DocumentH
 	return highlights, nil
 }
 
-func (gi *graphInfo) readURI(td protocol.TextDocumentIdentifier) (document.Document, error) {
+func readDocumentIdentifier(td protocol.TextDocumentIdentifier) (document.Document, error) {
 	readCloser, err := files.URIToReader(td.URI)
 	if err != nil {
 		return document.Document{}, err
 	}
 	defer readCloser.Close()
-	d, err := document.New(gi.logger, readCloser)
+	d, err := document.New(readCloser)
 	if err != nil {
 		return document.Document{}, err
 	}
@@ -309,7 +281,7 @@ func (gi *graphInfo) linkToURI(l document.Link) (*protocol.DocumentUri, error) {
 		uri := page.ToURI(gi.path, gi.journalsPath, gi.pagesPath)
 		return &uri, nil
 	case document.BlockEmbed:
-		block, err := gi.client.GetBlock(l.Target)
+		block, err := gi.client.GetBlock(l.Target, false)
 		if err != nil {
 			gi.logger.Error("error in linkToUri", fmt.Errorf("error type mismatch getBlock: %v", block), slog.Any("link", l))
 			return nil, fmt.Errorf("error calling getBlock: %w", err)
@@ -319,6 +291,8 @@ func (gi *graphInfo) linkToURI(l document.Link) (*protocol.DocumentUri, error) {
 			gi.logger.Error("error in linkToUri", fmt.Errorf("error calling getPage: %w", err))
 			return nil, fmt.Errorf("error calling getPage: %w", err)
 		}
+		gi.logger.Info("found page", slog.Any("page", page), slog.Any("block", block.Page.ID))
+
 		uri := page.ToURI(gi.path, gi.journalsPath, gi.pagesPath)
 		return &uri, nil
 	default:
@@ -338,6 +312,17 @@ func (gi *graphInfo) queryToMarkup(response logseq.Query) protocol.MarkupContent
 	return s
 }
 
+func (gi *graphInfo) blockToMarkup(response logseq.Block) protocol.MarkupContent {
+	s := protocol.MarkupContent{
+		Kind:  protocol.MarkupKindMarkdown,
+		Value: "- " + response.Content + "\n",
+	}
+	for _, m := range response.Children {
+		s.Value = s.Value + "\t- " + m.Content + "\n"
+	}
+	return s
+}
+
 func (gi *graphInfo) linkToDocument(l document.Link) (document.Document, error) {
 	uri, err := gi.linkToURI(l)
 	if err != nil {
@@ -348,7 +333,7 @@ func (gi *graphInfo) linkToDocument(l document.Link) (document.Document, error) 
 		return document.Document{}, err
 	}
 	defer file.Close()
-	doc, err := document.New(gi.logger, file)
+	doc, err := document.New(file)
 	if err != nil {
 		return document.Document{}, err
 	}
