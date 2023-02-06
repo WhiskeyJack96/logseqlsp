@@ -18,9 +18,6 @@ import (
 
 const lsName = "logSeq"
 
-// TODO make logging a config
-var logging = false
-
 var version = "0.0.1"
 
 // TODO get pages/journals path from the logseq api or make them config values
@@ -38,15 +35,21 @@ type graphInfo struct {
 
 func main() {
 	lf := io.Discard
-	if logging {
-		dir, err := os.UserHomeDir()
-		if err != nil {
-			panic(err)
-		}
-		lf, err = os.Create(path.Join(dir, ".config", "logseqlsp", "log.json"))
-		if err != nil {
-			panic(err)
-		}
+	dir, err := os.UserHomeDir()
+	defer func() {
+		a := recover()
+		slog.New(slog.NewJSONHandler(os.Stderr)).Info("unexpected error", slog.Any("r", a))
+	}()
+	if err != nil {
+		panic(err)
+	}
+	err = os.MkdirAll(path.Join(dir, ".config", "logseqlsp"), 0744)
+	if err != nil {
+		return
+	}
+	lf, err = os.Create(path.Join(dir, ".config", "logseqlsp", "log.json"))
+	if err != nil {
+		panic(err)
 	}
 	logger := slog.New(slog.NewJSONHandler(lf))
 	logger.Info("test", slog.String("version", version))
@@ -269,36 +272,39 @@ func readDocumentIdentifier(td protocol.TextDocumentIdentifier) (document.Docume
 }
 
 func (gi *graphInfo) linkToURI(l document.Link) (*protocol.DocumentUri, error) {
+	var page logseq.Page
 	switch l.Type {
 	case document.Wiki, document.Tag, document.Prop:
 		if l.Target == "" {
 			return nil, nil
 		}
-		page, err := gi.client.GetPageByName(l.Target)
+		var err error
+		page, err = gi.client.GetPageByName(l.Target)
 		if err != nil {
 			return nil, err
 		}
-		uri := page.ToURI(gi.path, gi.journalsPath, gi.pagesPath)
-		return &uri, nil
 	case document.BlockEmbed:
 		block, err := gi.client.GetBlock(l.Target, false)
 		if err != nil {
 			gi.logger.Error("error in linkToUri", fmt.Errorf("error type mismatch getBlock: %v", block), slog.Any("link", l))
 			return nil, fmt.Errorf("error calling getBlock: %w", err)
 		}
-		page, err := gi.client.GetPageById(block.Page.ID)
+		page, err = gi.client.GetPageById(block.Page.ID)
 		if err != nil {
 			gi.logger.Error("error in linkToUri", fmt.Errorf("error calling getPage: %w", err))
 			return nil, fmt.Errorf("error calling getPage: %w", err)
 		}
 		gi.logger.Info("found page", slog.Any("page", page), slog.Any("block", block.Page.ID))
-
-		uri := page.ToURI(gi.path, gi.journalsPath, gi.pagesPath)
-		return &uri, nil
 	default:
 		gi.logger.Error("error in linkToUri", fmt.Errorf("unsupported link type: %s", l.Type))
 		return nil, fmt.Errorf("unsupported link type: %s", l.Type)
 	}
+	uri, err := page.ToURI(gi.path, gi.journalsPath, gi.pagesPath)
+	if err != nil {
+		gi.logger.Error("error converting page to URI", err)
+		return nil, err
+	}
+	return &uri, nil
 }
 
 func (gi *graphInfo) queryToMarkup(response logseq.Query) protocol.MarkupContent {

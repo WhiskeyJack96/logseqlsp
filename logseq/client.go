@@ -2,6 +2,7 @@ package logseq
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/WhiskeyJack96/logseqlsp/files"
 	"github.com/go-resty/resty/v2"
@@ -129,13 +130,19 @@ func UnmarshalPage(data []byte) (Page, error) {
 	return r, err
 }
 
+var ErrInvalidPage = errors.New("invalid page")
+
+func (r *Page) IsZero() bool {
+	return r == nil || *r == Page{}
+}
+
 func (r *Page) Marshal() ([]byte, error) {
 	return json.Marshal(r)
 }
 
-func (r *Page) ToURI(base string, journalPath string, pagePath string) string {
-	if r == nil {
-		return ""
+func (r *Page) ToURI(base string, journalPath string, pagePath string) (string, error) {
+	if r.IsZero() {
+		return "", ErrInvalidPage
 	}
 	sanitizedName := strings.Replace(r.Name, "/", "___", -1)
 
@@ -146,7 +153,7 @@ func (r *Page) ToURI(base string, journalPath string, pagePath string) string {
 		fileName = fmt.Sprintf("%s_%s_%s.md", dateString[0:4], dateString[4:6], dateString[6:])
 		subFolder = journalPath
 	}
-	return files.PathToFileURI(path.Join(base, subFolder, fileName))
+	return files.PathToFileURI(path.Join(base, subFolder, fileName)), nil
 }
 
 type Properties map[string]any
@@ -162,6 +169,9 @@ func (c Client) GetBlock(id string, includeChildren bool) (Block, error) {
 	if response.IsError() {
 		return Block{}, fmt.Errorf("error retrieving block: %s", string(response.Body()))
 	}
+	if len(response.Body()) == 0 || string(response.Body()) == "null" {
+		return Block{}, errors.New("invalid response, ensure the logseq rest server running")
+	}
 	return UnmarshalBlock(response.Body())
 }
 
@@ -176,6 +186,9 @@ func (c Client) GetPageById(id int64) (Page, error) {
 	if response.IsError() {
 		return Page{}, fmt.Errorf("error retrieving block: %s", string(response.Body()))
 	}
+	if len(response.Body()) == 0 || string(response.Body()) == "null" {
+		return Page{}, errors.New("invalid response, ensure the logseq rest server running")
+	}
 	return UnmarshalPage(response.Body())
 }
 
@@ -189,6 +202,9 @@ func (c Client) GetPageByName(name string) (Page, error) {
 	}
 	if response.IsError() {
 		return Page{}, fmt.Errorf("error retrieving block: %s", string(response.Body()))
+	}
+	if len(response.Body()) == 0 || string(response.Body()) == "null" {
+		return Page{}, errors.New("invalid response, ensure the logseq rest server running")
 	}
 	return UnmarshalPage(response.Body())
 }
