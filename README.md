@@ -13,7 +13,7 @@
         scope = "source.md"
         injection-regex = "md|markdown"
         file-types = ["md", "markdown"]
-        language-server = { command = "logseqlsp", args=[] }
+        language-server = { command = "logseqlsp", args=["-t", "{your-token}", "-p", "{lsp-port}"], "--log-file", "{/path/to/file}" }
         indent = { tab-width = 2, unit = "  " }
     ```
 

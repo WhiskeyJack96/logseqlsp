@@ -6,6 +6,7 @@ import (
 	"github.com/WhiskeyJack96/logseqlsp/document"
 	"github.com/WhiskeyJack96/logseqlsp/files"
 	"github.com/WhiskeyJack96/logseqlsp/logseq"
+	"github.com/spf13/cobra"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"github.com/tliron/glsp/server"
@@ -31,40 +32,73 @@ type graphInfo struct {
 	client  logseq.Client
 	logger  *slog.Logger
 	handler protocol.Handler
+	config  config
+}
+
+type config struct {
+	logging bool
+	port    int32
+	token   string
+	logFile string
 }
 
 func main() {
-	lf := io.Discard
-	dir, err := os.UserHomeDir()
-	defer func() {
-		a := recover()
-		slog.New(slog.NewJSONHandler(os.Stderr)).Info("unexpected error", slog.Any("r", a))
-	}()
-	if err != nil {
-		panic(err)
+	root := cobra.Command{
+		Use:  "",
+		RunE: run,
 	}
-	err = os.MkdirAll(path.Join(dir, ".config", "logseqlsp"), 0744)
+	root.Flags().StringP("token", "t", "", "token to auth to logseq")
+	root.Flags().BoolP("logging", "l", true, "enable/disable logging")
+	userHomeDir, err := os.UserHomeDir()
 	if err != nil {
-		return
+		slog.New(slog.NewJSONHandler(os.Stderr)).Error("unexpected error", err)
 	}
-	lf, err = os.Create(path.Join(dir, ".config", "logseqlsp", "log.json"))
+	root.Flags().String("log-file", path.Join(userHomeDir, ".config/logseqlsp/log.json"), "file to log too defaults to (~/.config/logseqlsp/log.json)")
+	root.Flags().Int32P("port", "p", 12315, "port logseq is listening on")
+
+	err = root.Execute()
 	if err != nil {
-		panic(err)
+		slog.New(slog.NewJSONHandler(os.Stderr)).Error("unexpected error", err)
 	}
-	logger := slog.New(slog.NewJSONHandler(lf))
-	logger.Info("test", slog.String("version", version))
+}
+func run(cmd *cobra.Command, args []string) error {
+	port, err := cmd.Flags().GetInt32("port")
+	if err != nil {
+		return err
+	}
+	logging, err := cmd.Flags().GetBool("logging")
+	if err != nil {
+		return err
+	}
+	token, err := cmd.Flags().GetString("token")
+	if err != nil {
+		return err
+	}
+	logFile, err := cmd.Flags().GetString("log-file")
+	if err != nil {
+		return err
+	}
+	if logging && !path.IsAbs(logFile) {
+		return fmt.Errorf("logFile is not a valid, absolute path: %s", logFile)
+	}
+
+	logger, err := newLogger(logging, logFile)
+	if err != nil {
+		return err
+	}
+	logger.Debug("staring up", slog.String("version", version))
 	defer func() {
 		a := recover()
 		logger.Info("panic recovered", slog.Any("r", a))
 	}()
-	client, err := logseq.NewClient()
+	client, err := logseq.NewClient(logger, logseq.WithToken(token), logseq.WithBaseUrl(fmt.Sprintf("http://localhost:%d/api", port)))
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	graph, err := client.CurrentGraph()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	info := graphInfo{
@@ -74,6 +108,12 @@ func main() {
 		journalsPath: "journals",
 		client:       client,
 		logger:       logger,
+		config: config{
+			logging: logging,
+			port:    port,
+			token:   token,
+			logFile: logFile,
+		},
 	}
 
 	info.handler = protocol.Handler{
@@ -92,6 +132,27 @@ func main() {
 	s := server.NewServer(&info.handler, lsName, false)
 
 	logger.Error("run error", s.RunStdio())
+	return nil
+}
+
+func newLogger(logging bool, logFile string) (*slog.Logger, error) {
+	if !logging {
+		return slog.New(slog.NewJSONHandler(io.Discard)), nil
+	}
+	if _, err := os.ReadDir(path.Dir(logFile)); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		err = os.MkdirAll(path.Dir(logFile), 0744)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lf, err := os.Create(logFile)
+	if err != nil {
+		return nil, err
+	}
+	return slog.New(slog.NewJSONHandler(lf)), nil
 }
 
 func (gi *graphInfo) initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
@@ -218,7 +279,7 @@ func (gi *graphInfo) hover(context *glsp.Context, params *protocol.HoverParams) 
 		}
 		return &protocol.Hover{Contents: gi.queryToMarkup(response), Range: &l.Range}, nil
 	case document.BlockEmbed:
-		response, err := gi.client.GetBlock(l.Target, true)
+		response, err := gi.client.GetBlock(l.Target)
 		if err != nil {
 			return nil, err
 		}
@@ -284,9 +345,9 @@ func (gi *graphInfo) linkToURI(l document.Link) (*protocol.DocumentUri, error) {
 			return nil, err
 		}
 	case document.BlockEmbed:
-		block, err := gi.client.GetBlock(l.Target, false)
+		block, err := gi.client.GetBlock(l.Target)
 		if err != nil {
-			gi.logger.Error("error in linkToUri", fmt.Errorf("error type mismatch getBlock: %v", block), slog.Any("link", l))
+			gi.logger.Error("error in linkToUri", err, slog.Any("link", l))
 			return nil, fmt.Errorf("error calling getBlock: %w", err)
 		}
 		page, err = gi.client.GetPageById(block.Page.ID)

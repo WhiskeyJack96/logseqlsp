@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/WhiskeyJack96/logseqlsp/files"
 	"github.com/go-resty/resty/v2"
+	"golang.org/x/exp/slog"
 	"path"
 	"strconv"
 	"strings"
@@ -14,15 +15,28 @@ import (
 const IDProperty = "id"
 
 type Client struct {
-	r *resty.Client
+	r      *resty.Client
+	logger *slog.Logger
 }
 
-func NewClient(options ...func()) (Client, error) {
-	lsClient := resty.New().
-		SetBaseURL("http://localhost:12315/api").
-		SetAuthToken("test")
+func WithBaseUrl(url string) func(client *resty.Client) *resty.Client {
+	return func(client *resty.Client) *resty.Client {
+		return client.SetBaseURL(url)
+	}
+}
+func WithToken(token string) func(client *resty.Client) *resty.Client {
+	return func(client *resty.Client) *resty.Client {
+		return client.SetAuthToken(token)
+	}
+}
+
+func NewClient(logger *slog.Logger, options ...func(client *resty.Client) *resty.Client) (Client, error) {
+	lsClient := resty.New()
+	for _, option := range options {
+		lsClient = option(lsClient)
+	}
 	lsClient.HeaderAuthorizationKey = "Authorization"
-	return Client{r: lsClient}, nil
+	return Client{r: lsClient, logger: logger}, nil
 }
 
 func (c Client) CurrentGraph() (CurrentGraph, error) {
@@ -158,10 +172,10 @@ func (r *Page) ToURI(base string, journalPath string, pagePath string) (string, 
 
 type Properties map[string]any
 
-func (c Client) GetBlock(id string, includeChildren bool) (Block, error) {
+func (c Client) GetBlock(id string) (Block, error) {
 	response, err := c.r.R().SetBody(map[string]any{
 		"method": "logseq.App.getBlock",
-		"args":   []any{id, map[string]bool{"includeChildren": includeChildren}},
+		"args":   []any{id, map[string]bool{"includeChildren": true}},
 	}).Post("")
 	if err != nil {
 		return Block{}, err
@@ -172,7 +186,12 @@ func (c Client) GetBlock(id string, includeChildren bool) (Block, error) {
 	if len(response.Body()) == 0 || string(response.Body()) == "null" {
 		return Block{}, errors.New("invalid response, ensure the logseq rest server running")
 	}
-	return UnmarshalBlock(response.Body())
+	block, err := UnmarshalBlock(response.Body())
+	if err != nil {
+		c.logger.Error("error unmarshalling block", err, slog.String("raw", string(response.Body())))
+		return Block{}, err
+	}
+	return block, err
 }
 
 func (c Client) GetPageById(id int64) (Page, error) {
