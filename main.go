@@ -78,9 +78,6 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if logging && !path.IsAbs(logFile) {
-		return fmt.Errorf("logFile is not a valid, absolute path: %s", logFile)
-	}
 
 	logger, err := newLogger(logging, logFile)
 	if err != nil {
@@ -89,7 +86,9 @@ func run(cmd *cobra.Command, args []string) error {
 	logger.Debug("staring up", slog.String("version", version))
 	defer func() {
 		a := recover()
-		logger.Info("panic recovered", slog.Any("r", a))
+		if a != nil {
+			logger.Warn("panic recovered", slog.Any("r", a))
+		}
 	}()
 	client, err := logseq.NewClient(logger, logseq.WithToken(token), logseq.WithBaseUrl(fmt.Sprintf("http://localhost:%d/api", port)))
 	if err != nil {
@@ -117,10 +116,35 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	info.handler = protocol.Handler{
-		Initialize:                    info.initialize,
-		Initialized:                   info.initialized,
-		Shutdown:                      info.shutdown,
-		SetTrace:                      info.setTrace,
+		Initialize:  info.initialize,
+		Initialized: info.initialized,
+		Shutdown:    info.shutdown,
+		SetTrace:    info.setTrace,
+		TextDocumentDidOpen: func(context *glsp.Context, params *protocol.DidOpenTextDocumentParams) error {
+			info.logger.Info(context.Method, slog.String("file", params.TextDocument.URI))
+
+			return nil
+		},
+		TextDocumentDidChange: func(context *glsp.Context, params *protocol.DidChangeTextDocumentParams) error {
+			info.logger.Info(context.Method, slog.String("file", params.TextDocument.URI))
+			return nil
+		},
+		TextDocumentDidClose: func(context *glsp.Context, params *protocol.DidCloseTextDocumentParams) error {
+			info.logger.Info(context.Method, slog.String("file", params.TextDocument.URI))
+			return nil
+		},
+		TextDocumentWillSave: func(context *glsp.Context, params *protocol.WillSaveTextDocumentParams) error {
+			info.logger.Info(context.Method, slog.String("file", params.TextDocument.URI))
+			return nil
+		},
+		TextDocumentWillSaveWaitUntil: func(context *glsp.Context, params *protocol.WillSaveTextDocumentParams) ([]protocol.TextEdit, error) {
+			info.logger.Info(context.Method, slog.String("file", params.TextDocument.URI))
+			return nil, nil
+		},
+		TextDocumentDidSave: func(context *glsp.Context, params *protocol.DidSaveTextDocumentParams) error {
+			info.logger.Info(context.Method, slog.String("file", params.TextDocument.URI))
+			return nil
+		},
 		TextDocumentHover:             info.hover,
 		TextDocumentDefinition:        info.definition,
 		TextDocumentDocumentHighlight: info.highlight,
@@ -130,8 +154,10 @@ func run(cmd *cobra.Command, args []string) error {
 	logger.Info("serving")
 
 	s := server.NewServer(&info.handler, lsName, false)
-
-	logger.Error("run error", s.RunStdio())
+	err = s.RunStdio()
+	if err != nil {
+		logger.Error("run error: ", err)
+	}
 	return nil
 }
 
@@ -161,6 +187,12 @@ func (gi *graphInfo) initialize(context *glsp.Context, params *protocol.Initiali
 	capabilities.DefinitionProvider = true
 	capabilities.HoverProvider = true
 	capabilities.DocumentHighlightProvider = true
+	capabilities.TextDocumentSync = &protocol.TextDocumentSyncOptions{
+		OpenClose:         &protocol.True,
+		WillSave:          &protocol.True,
+		WillSaveWaitUntil: &protocol.True,
+		Save:              &protocol.SaveOptions{IncludeText: &protocol.True},
+	}
 	capabilities.DocumentLinkProvider = &protocol.DocumentLinkOptions{
 		ResolveProvider: &protocol.True,
 	}
