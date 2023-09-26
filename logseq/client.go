@@ -158,7 +158,7 @@ func (r *Page) ToURI(base string, journalPath string, pagePath string) (string, 
 	if r.IsZero() {
 		return "", ErrInvalidPage
 	}
-	sanitizedName := strings.Replace(r.Name, "/", "___", -1)
+	sanitizedName := strings.Replace(r.OriginalName, "/", "___", -1)
 
 	fileName := fmt.Sprintf("%s.md", sanitizedName)
 	subFolder := pagePath
