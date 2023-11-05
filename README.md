@@ -6,16 +6,25 @@
 ## Usage
 
 - Download the release or build from source and copy the binary into your path. Then configure your lsp integration with the binary name.
-- For example in helix add this to `~/.config/helix/languages.toml`
-  - ```yaml
-        [[language]]
-        name = "markdown"
-        scope = "source.md"
-        injection-regex = "md|markdown"
-        file-types = ["md", "markdown"]
-        language-server = { command = "logseqlsp", args=["-t", "{your-token}", "-p", "{lsp-port}", "--log-file", "{/path/to/file}"] }
-        indent = { tab-width = 2, unit = "  " }
-    ```
+- Editor configuration examples:
+  - In helix add this to `~/.config/helix/languages.toml`
+    - ```yaml
+          [[language]]
+          name = "markdown"
+          scope = "source.md"
+          injection-regex = "md|markdown"
+          file-types = ["md", "markdown"]
+          language-server = { command = "logseqlsp", args=["-t", "{your-token}", "-p", "{lsp-port}", "--log-file", "{/path/to/file}"] }
+          indent = { tab-width = 2, unit = "  " }
+      ```
+  - In Emacs, add the following as your `eglot` config
+    - ``` emacs-lisp
+      (use-package eglot
+        :ensure t
+        :config
+        (add-to-list 'eglot-server-programs '(markdown-mode . ("logseqlsp" "-t" "{your-token}" "--log-file" "{/path/to/file}")))
+        (add-hook 'markdown-mode-hook 'eglot-ensure))
+      ```
 
 ## Planned features
   - Support for code actions to do the following will be hit in the next pass
